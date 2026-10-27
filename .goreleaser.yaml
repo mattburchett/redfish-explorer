@@ -64,7 +64,9 @@ snapshot:
 
 changelog:
   sort: asc
-  use: github
+  use: git
+  # Commit hash and subject only: no author names or emails.
+  format: "{{ .SHA }}: {{ .Message }}"
   filters:
     exclude:
       - "^docs:"
