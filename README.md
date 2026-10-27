@@ -84,9 +84,16 @@ auth automatically.
 | `R`                | Refresh, bypassing the cache                               |
 | `y` / `s`          | Copy the URL to the clipboard / save the JSON to a file    |
 | `e`                | Edit the value under the cursor (tab cycles `AllowableValues`) |
-| `a`                | Run one of the resource's Actions                          |
+| `a`                | Run one of the resource's Actions through a parameter form |
 | `P`                | Send a raw PATCH body                                      |
 | `?` / `q`          | Help / quit                                                |
+
+Actions open a form with one row per parameter: `←/→` cycle the allowed
+values, Enter edits free-text fields, `x` clears one, `s` sends. Parameters
+come from the inline `@Redfish.AllowableValues` annotations and, when the BMC
+provides one, the action's `@Redfish.ActionInfo` resource (names, types,
+required flags). `r` drops to a raw JSON body if you need something the form
+can't express.
 
 Every write shows the exact method, path and JSON body first and only sends on
 `y`. After a successful write the resource is reloaded so you see the result.

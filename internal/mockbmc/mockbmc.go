@@ -20,7 +20,9 @@ const (
 var tree = map[string]string{
 	"/redfish/v1":                            `{"@odata.id":"/redfish/v1","@odata.type":"#ServiceRoot.v1_9_0.ServiceRoot","Id":"RootService","Name":"Mock Service Root","RedfishVersion":"1.11.0","Product":"mockbmc","Systems":{"@odata.id":"/redfish/v1/Systems"},"Chassis":{"@odata.id":"/redfish/v1/Chassis"},"Managers":{"@odata.id":"/redfish/v1/Managers"},"SessionService":{"@odata.id":"/redfish/v1/SessionService"},"Links":{"Sessions":{"@odata.id":"/redfish/v1/SessionService/Sessions"}}}`,
 	"/redfish/v1/Systems":                    `{"@odata.id":"/redfish/v1/Systems","@odata.type":"#ComputerSystemCollection.ComputerSystemCollection","Name":"Computer System Collection","Members@odata.count":2,"Members":[{"@odata.id":"/redfish/v1/Systems/1"},{"@odata.id":"/redfish/v1/Systems/2"}]}`,
-	"/redfish/v1/Systems/1":                  `{"@odata.id":"/redfish/v1/Systems/1","@odata.type":"#ComputerSystem.v1_13_0.ComputerSystem","Id":"1","Name":"Mock System One","Description":"A pretend server with a long description that should wrap nicely inside the detail pane when the terminal is narrow.","Manufacturer":"Acme","Model":"Rack 9000","SerialNumber":"SN0001","PowerState":"On","Status":{"State":"Enabled","Health":"OK","HealthRollup":"Warning"},"MemorySummary":{"TotalSystemMemoryGiB":256,"Status":{"Health":"OK"}},"ProcessorSummary":{"Count":2,"Model":"Acme CPU","Status":{"Health":"OK"}},"Boot":{"BootSourceOverrideEnabled":"Once","BootSourceOverrideTarget":"Pxe","BootSourceOverrideTarget@Redfish.AllowableValues":["None","Pxe","Hdd","Cd","BiosSetup"]},"UUID":"7d1a0bdc-5b9b-4f6c-9a5e-123456789abc","Processors":{"@odata.id":"/redfish/v1/Systems/1/Processors"},"Actions":{"#ComputerSystem.Reset":{"target":"/redfish/v1/Systems/1/Actions/ComputerSystem.Reset","ResetType@Redfish.AllowableValues":["On","ForceOff","GracefulRestart"]}},"Links":{"Chassis":[{"@odata.id":"/redfish/v1/Chassis/1"}],"ManagedBy":[{"@odata.id":"/redfish/v1/Managers/BMC"}]},"Oem":{"Acme":{"Widgets":[],"Thing":null,"Nested":{"Deep":{"Deeper":{"Value":true}}}}}}`,
+	"/redfish/v1/Systems/1":                  `{"@odata.id":"/redfish/v1/Systems/1","@odata.type":"#ComputerSystem.v1_13_0.ComputerSystem","Id":"1","Name":"Mock System One","Description":"A pretend server with a long description that should wrap nicely inside the detail pane when the terminal is narrow.","Manufacturer":"Acme","Model":"Rack 9000","SerialNumber":"SN0001","PowerState":"On","Status":{"State":"Enabled","Health":"OK","HealthRollup":"Warning"},"MemorySummary":{"TotalSystemMemoryGiB":256,"Status":{"Health":"OK"}},"ProcessorSummary":{"Count":2,"Model":"Acme CPU","Status":{"Health":"OK"}},"Boot":{"BootSourceOverrideEnabled":"Once","BootSourceOverrideTarget":"Pxe","BootSourceOverrideTarget@Redfish.AllowableValues":["None","Pxe","Hdd","Cd","BiosSetup"]},"UUID":"7d1a0bdc-5b9b-4f6c-9a5e-123456789abc","Processors":{"@odata.id":"/redfish/v1/Systems/1/Processors"},"Actions":{"#ComputerSystem.Reset":{"target":"/redfish/v1/Systems/1/Actions/ComputerSystem.Reset","@Redfish.ActionInfo":"/redfish/v1/Systems/1/ResetActionInfo","ResetType@Redfish.AllowableValues":["On","ForceOff","GracefulRestart"]},"Oem":{"Acme":{"#Acme.Beep":{"target":"/redfish/v1/Systems/1/Actions/Oem/Acme.Beep","@Redfish.ActionInfo":"/redfish/v1/Systems/1/BeepActionInfo"}}}},"Links":{"Chassis":[{"@odata.id":"/redfish/v1/Chassis/1"}],"ManagedBy":[{"@odata.id":"/redfish/v1/Managers/BMC"}]},"Oem":{"Acme":{"Widgets":[],"Thing":null,"Nested":{"Deep":{"Deeper":{"Value":true}}}}}}`,
+	"/redfish/v1/Systems/1/ResetActionInfo":  `{"@odata.id":"/redfish/v1/Systems/1/ResetActionInfo","@odata.type":"#ActionInfo.v1_1_2.ActionInfo","Id":"ResetActionInfo","Name":"Reset Action Info","Parameters":[{"Name":"ResetType","Required":true,"DataType":"String","AllowableValues":["On","ForceOff","GracefulRestart","ForceRestart"]}]}`,
+	"/redfish/v1/Systems/1/BeepActionInfo":   `{"@odata.id":"/redfish/v1/Systems/1/BeepActionInfo","@odata.type":"#ActionInfo.v1_1_2.ActionInfo","Id":"BeepActionInfo","Name":"Beep Action Info","Parameters":[{"Name":"Times","Required":true,"DataType":"Number"},{"Name":"Message","Required":false,"DataType":"String"},{"Name":"Loud","Required":false,"DataType":"Boolean"},{"Name":"Tones","Required":false,"DataType":"StringArray","AllowableValues":["Low","Mid","High"]}]}`,
 	"/redfish/v1/Systems/2":                  `{"@odata.id":"/redfish/v1/Systems/2","@odata.type":"#ComputerSystem.v1_13_0.ComputerSystem","Id":"2","Name":"Mock System Two","PowerState":"Off","Status":{"State":"Disabled","Health":"Critical"},"Links":{"Chassis":[{"@odata.id":"/redfish/v1/Chassis/1"}]}}`,
 	"/redfish/v1/Systems/1/Processors":       `{"@odata.id":"/redfish/v1/Systems/1/Processors","@odata.type":"#ProcessorCollection.ProcessorCollection","Name":"Processors","Members@odata.count":2,"Members":[{"@odata.id":"/redfish/v1/Systems/1/Processors/CPU.1"},{"@odata.id":"/redfish/v1/Systems/1/Processors/CPU.2"}]}`,
 	"/redfish/v1/Systems/1/Processors/CPU.1": `{"@odata.id":"/redfish/v1/Systems/1/Processors/CPU.1","@odata.type":"#Processor.v1_10_0.Processor","Id":"CPU.1","Name":"CPU 1","Socket":"CPU.1","TotalCores":32,"TotalThreads":64,"MaxSpeedMHz":3500,"Status":{"State":"Enabled","Health":"OK"}}`,
@@ -133,6 +135,19 @@ func Handler(noSession bool, logf func(string, ...any)) http.Handler {
 			b, _ := json.Marshal(sys)
 			state["/redfish/v1/Systems/1"] = string(b)
 			mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Method == http.MethodPost && path == "/redfish/v1/Systems/1/Actions/Oem/Acme.Beep" {
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				errBody(w, http.StatusBadRequest, "malformed JSON")
+				return
+			}
+			if _, ok := body["Times"].(float64); !ok {
+				errBody(w, http.StatusBadRequest, "Times must be a number")
+				return
+			}
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}

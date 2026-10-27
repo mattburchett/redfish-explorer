@@ -34,7 +34,8 @@ const (
 	modeEdit       // inline value editor (overlay)
 	modeRawPatch   // free-form PATCH body (overlay)
 	modeActions    // pick an action (overlay)
-	modeActionBody // edit action parameters (overlay)
+	modeActionForm // fill in the action's parameters (overlay)
+	modeActionBody // raw JSON body fallback (overlay)
 	modeConfirm    // confirm a write (overlay)
 	modeNotice     // show a write result (overlay)
 	modeSending
@@ -69,17 +70,6 @@ type writeMsg struct {
 	op  pendingOp
 	res *redfish.Resource
 	err error
-}
-
-type action struct {
-	Name   string
-	Target string
-	Params []actionParam
-}
-
-type actionParam struct {
-	Name   string
-	Values []string
 }
 
 type navItem struct {
@@ -128,6 +118,7 @@ type explorer struct {
 	allowIdx   int
 	actions    []action
 	acur       int
+	form       actionForm
 	pending    pendingOp
 	notice     []string
 
@@ -421,66 +412,6 @@ func (e *explorer) detailLine() lineInfo {
 	return lineInfo{}
 }
 
-// ---- actions --------------------------------------------------------------
-
-func extractActions(v *ojson.Value) []action {
-	if v == nil {
-		return nil
-	}
-	acts := v.Get("Actions")
-	if acts == nil || acts.Kind != ojson.Object {
-		return nil
-	}
-	var out []action
-	var collect func(obj *ojson.Value)
-	collect = func(obj *ojson.Value) {
-		for _, m := range obj.Obj {
-			if m.Key == "Oem" && m.Val.Kind == ojson.Object {
-				for _, o := range m.Val.Obj {
-					if o.Val.Kind == ojson.Object {
-						collect(o.Val)
-					}
-				}
-				continue
-			}
-			if !strings.HasPrefix(m.Key, "#") || m.Val.Kind != ojson.Object {
-				continue
-			}
-			a := action{Name: strings.TrimPrefix(m.Key, "#"), Target: m.Val.StrAt("target")}
-			if a.Target == "" {
-				continue
-			}
-			for _, p := range m.Val.Obj {
-				if name, ok := strings.CutSuffix(p.Key, "@Redfish.AllowableValues"); ok && p.Val.Kind == ojson.Array {
-					ap := actionParam{Name: name}
-					for _, x := range p.Val.Arr {
-						ap.Values = append(ap.Values, x.Scalar())
-					}
-					a.Params = append(a.Params, ap)
-				}
-			}
-			out = append(out, a)
-		}
-	}
-	collect(acts)
-	return out
-}
-
-func (a action) defaultBody() string {
-	if len(a.Params) == 0 {
-		return "{}"
-	}
-	v := &ojson.Value{Kind: ojson.Object}
-	for _, p := range a.Params {
-		val := ""
-		if len(p.Values) > 0 {
-			val = p.Values[0]
-		}
-		v.Obj = append(v.Obj, ojson.Member{Key: p.Name, Val: &ojson.Value{Kind: ojson.String, Str: val}})
-	}
-	return string(v.Marshal(""))
-}
-
 // ---- update ---------------------------------------------------------------
 
 func (e explorer) update(msg tea.Msg) (explorer, tea.Cmd) {
@@ -489,6 +420,20 @@ func (e explorer) update(msg tea.Msg) (explorer, tea.Cmd) {
 		return e, e.onFetch(msg)
 	case writeMsg:
 		return e, e.onWrite(msg)
+	case actionInfoMsg:
+		if msg.res != nil && msg.err == nil {
+			e.cache[msg.path()] = msg.res
+		}
+		if e.mode == modeActionForm && e.form.act.Target == msg.target {
+			e.form.loading = false
+			if msg.err != nil || msg.res == nil || msg.res.Value == nil {
+				e.form.err = "could not load parameter info: " + errString(msg.err)
+			} else {
+				e.actions[e.acur].mergeActionInfo(msg.res.Value)
+				e.form.refresh(e.actions[e.acur])
+			}
+		}
+		return e, nil
 	case tea.MouseMsg:
 		if e.mode != modeNormal {
 			return e, nil
@@ -802,15 +747,13 @@ func (e explorer) updateMode(msg tea.KeyMsg) (explorer, tea.Cmd) {
 		case "k", "up":
 			e.acur = max(e.acur-1, 0)
 		case "enter":
-			a := e.actions[e.acur]
-			e.mode = modeActionBody
-			e.in.Placeholder = "{}"
-			e.in.Width = e.overlayWidth() - 6
-			e.in.SetValue(a.defaultBody())
-			e.in.CursorEnd()
-			return e, e.in.Focus()
+			return e, e.openActionForm()
 		}
 		return e, nil
+	case modeActionForm:
+		if !e.form.editing {
+			return e.updateActionForm(k)
+		}
 	}
 
 	// Text-input modes.
@@ -821,7 +764,11 @@ func (e explorer) updateMode(msg tea.KeyMsg) (explorer, tea.Cmd) {
 			e.filter = ""
 			e.applyFilter()
 		case modeActionBody:
-			e.mode = modeActions
+			e.mode = modeActionForm
+			e.in.Blur()
+			return e, nil
+		case modeActionForm: // cancel editing a field
+			e.form.editing = false
 			e.in.Blur()
 			return e, nil
 		}
@@ -829,6 +776,18 @@ func (e explorer) updateMode(msg tea.KeyMsg) (explorer, tea.Cmd) {
 		e.in.Blur()
 		return e, nil
 	case "tab", "shift+tab":
+		if e.mode == modeActionForm {
+			if fld := e.form.field(); fld != nil && fld.p.isEnum() {
+				d := 1
+				if k == "shift+tab" {
+					d = -1
+				}
+				e.form.cycle(d)
+				e.in.SetValue(fld.value)
+				e.in.CursorEnd()
+			}
+			return e, nil
+		}
 		if e.mode == modeEdit && len(e.editTarget.Allowable) > 0 {
 			n := len(e.editTarget.Allowable)
 			if k == "tab" {
@@ -886,6 +845,14 @@ func (e explorer) updateMode(msg tea.KeyMsg) (explorer, tea.Cmd) {
 			}
 			a := e.actions[e.acur]
 			e.stage("POST", a.Target, v.Marshal("  "), a.Name)
+		case modeActionForm:
+			e.mode = modeActionForm
+			e.form.editing = false
+			if fld := e.form.field(); fld != nil {
+				fld.value = val
+				fld.set = strings.TrimSpace(val) != ""
+			}
+			e.form.err = ""
 		}
 		return e, nil
 	}
@@ -992,6 +959,155 @@ func httpText(code int) string {
 	return ""
 }
 
+func (e *explorer) openActionForm() tea.Cmd {
+	a := e.actions[e.acur]
+	e.mode = modeActionForm
+	e.form = newActionForm(a)
+	if a.InfoPath == "" {
+		return nil
+	}
+	if res, ok := e.cache[cleanPath(a.InfoPath)]; ok && res.Value != nil {
+		e.actions[e.acur].mergeActionInfo(res.Value)
+		e.form.refresh(e.actions[e.acur])
+		return nil
+	}
+	e.form.loading = true
+	return fetchActionInfo(e.client, a.Target, a.InfoPath)
+}
+
+func (e explorer) updateActionForm(k string) (explorer, tea.Cmd) {
+	f := &e.form
+	switch k {
+	case "esc", "q":
+		e.mode = modeActions
+	case "j", "down":
+		f.move(1)
+	case "k", "up":
+		f.move(-1)
+	case "right", "l", " ", "tab":
+		if f.onSend() {
+			return e, e.submitActionForm()
+		}
+		f.cycle(1)
+	case "left", "h", "shift+tab":
+		f.cycle(-1)
+	case "x", "backspace", "delete":
+		f.clear()
+	case "r":
+		// Raw JSON fallback, prefilled with whatever the form holds so far.
+		body := "{}"
+		if v, err := f.body(); err == nil {
+			body = string(v.Marshal(""))
+		}
+		e.mode = modeActionBody
+		e.in.Placeholder = "{}"
+		e.in.Width = e.overlayWidth() - 6
+		e.in.SetValue(body)
+		e.in.CursorEnd()
+		return e, e.in.Focus()
+	case "ctrl+s", "s":
+		return e, e.submitActionForm()
+	case "enter":
+		if f.onSend() {
+			return e, e.submitActionForm()
+		}
+		fld := f.field()
+		if fld.p.isEnum() && !strings.HasSuffix(strings.ToLower(fld.p.Type), "array") {
+			f.cycle(1) // single-valued choice: enter steps through the options
+			return e, nil
+		}
+		f.editing = true
+		e.in.Placeholder = typeHint(fld.p)
+		e.in.Width = e.overlayWidth() - 16
+		e.in.SetValue(fld.value)
+		e.in.CursorEnd()
+		return e, e.in.Focus()
+	}
+	return e, nil
+}
+
+func (e *explorer) submitActionForm() tea.Cmd {
+	v, err := e.form.body()
+	if err != nil {
+		e.form.err = err.Error()
+		return nil
+	}
+	a := e.form.act
+	e.stage("POST", a.Target, v.Marshal("  "), a.Name)
+	return nil
+}
+
+func (e explorer) actionFormOverlay() string {
+	f := e.form
+	w := e.overlayWidth() - 8
+	lines := []string{sFaint.Render("POST ") + sLink.Render(f.act.Target), ""}
+	if f.loading {
+		lines = append(lines, sDim.Render("loading parameter info…"), "")
+	}
+	if len(f.fields) == 0 && !f.loading {
+		lines = append(lines, sDim.Render("This action takes no parameters (or the BMC does not describe them)."), sDim.Render("Press r to type a JSON body by hand."), "")
+	}
+	nameW := 0
+	for _, fld := range f.fields {
+		nameW = max(nameW, len(fld.p.Name)+2)
+	}
+	nameW = min(nameW, 32)
+	for i, fld := range f.fields {
+		mark, nameSt := "  ", sKey
+		if i == f.cur {
+			mark, nameSt = sTitle.Render("▸ "), sTitle
+		}
+		name := fld.p.Name
+		if fld.p.Required {
+			name += sCrit.Render("*")
+		} else {
+			name += " "
+		}
+		name = padRight(name, nameW)
+		var val string
+		switch {
+		case i == f.cur && f.editing:
+			val = e.in.View()
+		case fld.p.isEnum():
+			var parts []string
+			for _, v := range fld.p.Values {
+				if fld.set && v == fld.value {
+					parts = append(parts, sSel.Render(" "+v+" "))
+				} else {
+					parts = append(parts, sDim.Render(v))
+				}
+			}
+			val = strings.Join(parts, sFaint.Render(" · "))
+			if !fld.set {
+				val = sFaint.Render("(unset)  ") + val
+			}
+		case fld.set:
+			val = sString.Render(fld.value) + "  " + sFaint.Render(typeHint(fld.p))
+		default:
+			val = sFaint.Render("(unset)  " + typeHint(fld.p))
+		}
+		lines = append(lines, mark+nameSt.Render(name)+" "+val)
+	}
+	lines = append(lines, "")
+	send := "[ Send ]"
+	if f.onSend() {
+		send = sSel.Render(" Send ")
+		send = sTitle.Render("▸ ") + send
+	} else {
+		send = "  " + sDim.Render(send)
+	}
+	lines = append(lines, send)
+	if f.err != "" {
+		lines = append(lines, "", sErr.Render("✗ "+f.err))
+	}
+	_ = w
+	footer := "↑/↓ field · ←/→ space choose · enter edit · x clear · s send · r raw JSON · esc back"
+	if f.editing {
+		footer = "enter set · tab cycle choices · esc cancel"
+	}
+	return e.boxOverlay(f.act.Name, lines, footer)
+}
+
 func (e *explorer) yank() {
 	if e.cur == nil {
 		return
@@ -1051,6 +1167,8 @@ func (e explorer) view(spin string) string {
 		overlay = e.boxOverlay("Raw PATCH "+e.curPath, []string{sDim.Render("JSON object to send as a merge-patch:"), "", e.in.View()}, "enter continue · esc cancel")
 	case e.mode == modeActions:
 		overlay = e.actionsOverlay()
+	case e.mode == modeActionForm:
+		overlay = e.actionFormOverlay()
 	case e.mode == modeActionBody:
 		overlay = e.actionBodyOverlay()
 	case e.mode == modeConfirm:
@@ -1165,7 +1283,7 @@ func (e explorer) actionBodyOverlay() string {
 		lines = append(lines, sDim.Render(p.Name+": ")+sFaint.Render(strings.Join(p.Values, " · ")))
 	}
 	lines = append(lines, "", sFaint.Render("body ")+e.in.View())
-	return e.boxOverlay(a.Name, lines, "enter continue · esc back")
+	return e.boxOverlay(a.Name+"  (raw JSON)", lines, "enter continue · esc back to form")
 }
 
 func (e explorer) confirmOverlay() string {
@@ -1436,7 +1554,7 @@ func helpView() string {
 	write := [][2]string{
 		{"e", "edit the value under the cursor"},
 		{"tab", "(while editing) cycle allowed values"},
-		{"a", "run an Action (POST)"},
+		{"a", "run an Action (POST): fill in its parameters"},
 		{"P", "send a raw PATCH body"},
 		{"y", "confirm a write · anything else cancels"},
 	}

@@ -210,15 +210,26 @@ func TestEditFlow(t *testing.T) {
 	// Action: reset -> Off
 	e, _ = e.update(tea.KeyMsg{Type: tea.KeyEnter})
 	e, _ = e.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
-	if e.mode != modeActions || len(e.actions) != 1 {
+	if e.mode != modeActions || len(e.actions) != 2 {
 		t.Fatalf("actions: %v %v", e.mode, e.actions)
 	}
 	checkFrame(t, e.view("⠋"), 120, 36)
-	e, _ = e.update(tea.KeyMsg{Type: tea.KeyEnter})
-	e.in.SetValue(`{"ResetType":"ForceOff"}`)
-	e, _ = e.update(tea.KeyMsg{Type: tea.KeyEnter})
-	if e.pending.method != "POST" || e.pending.path != "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset" {
-		t.Fatalf("pending = %+v", e.pending)
+	e, cmd = e.update(tea.KeyMsg{Type: tea.KeyEnter}) // opens the form, fetches ActionInfo
+	e = run(e, cmd)
+	if e.mode != modeActionForm || e.form.loading || len(e.form.fields) != 1 || !e.form.fields[0].p.Required {
+		t.Fatalf("form state: mode=%v loading=%v fields=%+v", e.mode, e.form.loading, e.form.fields)
+	}
+	if got := e.form.fields[0].p.Values; len(got) != 3 || got[0] != "On" {
+		t.Fatalf("values = %v", got)
+	}
+	e, _ = e.update(tea.KeyMsg{Type: tea.KeyRight}) // On -> ForceOff
+	if os.Getenv("SNAPSHOT") != "" {
+		fmt.Println(e.view("⠋"))
+	}
+	checkFrame(t, e.view("⠋"), 120, 36)
+	e, _ = e.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	if e.pending.method != "POST" || e.pending.path != "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset" || string(e.pending.body) != "{\n  \"ResetType\": \"ForceOff\"\n}" {
+		t.Fatalf("pending = %+v body=%s", e.pending, e.pending.body)
 	}
 	e, cmd = e.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
 	e = run(e, cmd)
@@ -256,4 +267,72 @@ func TestResult(t *testing.T) {
 func modelUpdate(m Model, msg tea.Msg) (Model, tea.Cmd) {
 	nm, cmd := m.Update(msg)
 	return nm.(Model), cmd
+}
+
+func TestActionForm(t *testing.T) {
+	e, done := setup(t, 120, 36)
+	defer done()
+	e = run(e, e.fetch("/redfish/v1/Systems/1", navReplace, false))
+	e, _ = e.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	e, _ = e.update(tea.KeyMsg{Type: tea.KeyDown}) // Acme.Beep
+	e, cmd := e.update(tea.KeyMsg{Type: tea.KeyEnter})
+	e = run(e, cmd)
+	f := &e.form
+	if f.act.Name != "Acme.Beep" || len(f.fields) != 4 {
+		t.Fatalf("form = %+v", f)
+	}
+	names := []string{}
+	for _, fld := range f.fields {
+		names = append(names, fld.p.Name+":"+typeHint(fld.p))
+	}
+	if strings.Join(names, ",") != "Times:number,Message:text,Loud:boolean,Tones:list, comma-separated" {
+		t.Fatalf("fields = %v", names)
+	}
+	// Required validation.
+	e, _ = e.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	if e.mode != modeActionForm || e.form.err != "Times is required" {
+		t.Fatalf("expected required error, got mode=%v err=%q", e.mode, e.form.err)
+	}
+	// Type Times.
+	e, _ = e.update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !e.form.editing {
+		t.Fatal("not editing")
+	}
+	e.in.SetValue("3")
+	e, _ = e.update(tea.KeyMsg{Type: tea.KeyEnter})
+	// Loud -> true, Tones -> Low
+	e, _ = e.update(tea.KeyMsg{Type: tea.KeyDown})
+	e, _ = e.update(tea.KeyMsg{Type: tea.KeyDown})
+	e, _ = e.update(tea.KeyMsg{Type: tea.KeyRight})
+	e, _ = e.update(tea.KeyMsg{Type: tea.KeyDown})
+	e, _ = e.update(tea.KeyMsg{Type: tea.KeyRight})
+	if os.Getenv("SNAPSHOT") != "" {
+		fmt.Println(e.view("⠋"))
+	}
+	checkFrame(t, e.view("⠋"), 120, 36)
+	e, _ = e.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	if e.mode != modeConfirm {
+		t.Fatalf("mode = %v err=%q", e.mode, e.form.err)
+	}
+	if got := string(mustParse(e.pending.body).Marshal("")); got != `{"Times":3,"Loud":true,"Tones":["Low"]}` {
+		t.Fatalf("body = %s", got)
+	}
+	e, cmd = e.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	e = run(e, cmd)
+	if e.mode != modeNotice || !strings.Contains(ansi.Strip(strings.Join(e.notice, "\n")), "HTTP 204") {
+		t.Fatalf("notice = %v", e.notice)
+	}
+	// Bad number is rejected before anything is sent.
+	e, _ = e.update(tea.KeyMsg{Type: tea.KeyEnter})
+	e, _ = e.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	e, _ = e.update(tea.KeyMsg{Type: tea.KeyDown})
+	e, cmd = e.update(tea.KeyMsg{Type: tea.KeyEnter})
+	e = run(e, cmd)
+	e, _ = e.update(tea.KeyMsg{Type: tea.KeyEnter})
+	e.in.SetValue("three")
+	e, _ = e.update(tea.KeyMsg{Type: tea.KeyEnter})
+	e, _ = e.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	if e.mode != modeActionForm || !strings.Contains(e.form.err, "not a number") {
+		t.Fatalf("expected number error, got mode=%v err=%q", e.mode, e.form.err)
+	}
 }
