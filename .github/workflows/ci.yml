@@ -19,7 +19,13 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: gofmt
-        run: test -z "$(gofmt -l cmd internal)" || (gofmt -l cmd internal && echo 'gofmt: files need formatting' && exit 1)
+        run: |
+          files=$(gofmt -l cmd internal)
+          if [ -n "$files" ]; then
+            echo "gofmt: these files need formatting:"
+            echo "$files"
+            exit 1
+          fi
       - name: vendor is in sync
         run: go mod vendor && git diff --exit-code -- vendor go.mod go.sum
       - name: go vet
