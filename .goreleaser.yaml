@@ -1,0 +1,92 @@
+# GoReleaser config: https://goreleaser.com
+version: 2
+
+project_name: rfx
+
+builds:
+  - id: rfx
+    main: ./cmd/rfx
+    binary: rfx
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    goos:
+      - linux
+      - darwin
+      - windows
+      - freebsd
+      - openbsd
+    goarch:
+      - amd64
+      - arm64
+      - arm
+      - "386"
+      - riscv64
+    goarm:
+      - "7"
+    ignore:
+      - { goos: darwin,  goarch: arm }
+      - { goos: darwin,  goarch: "386" }
+      - { goos: darwin,  goarch: riscv64 }
+      - { goos: windows, goarch: riscv64 }
+      - { goos: openbsd, goarch: riscv64 }
+      - { goos: freebsd, goarch: "386" }
+      - { goos: openbsd, goarch: "386" }
+      - { goos: openbsd, goarch: arm }
+
+universal_binaries:
+  - id: rfx-macos-universal
+    ids: [rfx]
+    replace: false
+    name_template: rfx
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ with .Arm }}v{{ . }}{{ end }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-dev+{{ .ShortCommit }}"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "merge conflict"
+      - Merge pull request
+      - Merge branch
+
+release:
+  github:
+    owner: mattburchett
+    name: redfish-explorer
+  draft: false
+  prerelease: auto
+  name_template: "rfx {{ .Version }}"
+  footer: |
+    ## Install
+
+    ```sh
+    go install github.com/mattburchett/redfish-explorer/cmd/rfx@{{ .Tag }}
+    ```
+
+    Or grab the archive for your platform above, extract `rfx`, and put it on your `PATH`.
+    `checksums.txt` has SHA-256 sums for every archive.
